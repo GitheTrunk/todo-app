@@ -14,8 +14,9 @@ export class TodosService {
     @InjectRepository(Todo) private readonly todosRepository: Repository<Todo>,
   ) {}
 
-  async create(createTodoDto: CreateTodoDto): Promise<Todo> {
+  async create(createTodoDto: CreateTodoDto, userId?: string): Promise<Todo> {
     const [lastTodo] = await this.todosRepository.find({
+      where: userId ? { user: { id: userId } } : {},
       order: { position: 'DESC' },
       take: 1,
     });
@@ -23,15 +24,20 @@ export class TodosService {
       ...createTodoDto,
       status: createTodoDto.status ?? TodoStatus.TODO,
       position: (lastTodo?.position ?? -1) + 1,
+      ...(userId ? { user: { id: userId } as any } : {}),
     });
     return this.todosRepository.save(todo);
   }
 
-  findAll(query: TodoQueryDto = {}): Promise<Todo[]> {
+  findAll(query: TodoQueryDto = {}, userId?: string): Promise<Todo[]> {
     const builder = this.todosRepository
       .createQueryBuilder('todo')
       .orderBy('todo.position', 'ASC')
       .addOrderBy('todo.id', 'ASC');
+
+    if (userId) {
+      builder.andWhere('(todo.userId = :userId OR todo.userId IS NULL)', { userId });
+    }
 
     if (query.status) builder.andWhere('todo.status = :status', { status: query.status });
     if (query.q?.trim()) builder.andWhere('todo.title ILIKE :q', { q: `%${query.q.trim()}%` });

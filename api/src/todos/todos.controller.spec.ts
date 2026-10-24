@@ -8,7 +8,20 @@ describe('TodosController', () => {
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       controllers: [TodosController],
-      providers: [TodosService],
+      providers: [
+        {
+          provide: TodosService,
+          useValue: {
+            create: vi.fn(),
+            findAll: vi.fn(),
+            findOne: vi.fn(),
+            update: vi.fn(),
+            remove: vi.fn(),
+            bulk: vi.fn(),
+            updateOrder: vi.fn(),
+          },
+        },
+      ],
     }).compile();
 
     controller = module.get<TodosController>(TodosController);

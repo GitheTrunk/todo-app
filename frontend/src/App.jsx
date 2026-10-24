@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState, useCallback } from 'react';
 import Header from './components/Header';
 import ProfileModal from './components/ProfileModal';
+import AuthModal from './components/AuthModal';
 import StatsDashboard from './components/StatsDashboard';
 import AddTodoForm from './components/AddTodoForm';
 import TodoFilters from './components/TodoFilters';
@@ -9,7 +10,18 @@ import BulkActionBar from './components/BulkActionBar';
 import EditTodoModal from './components/EditTodoModal';
 import Toast from './components/Toast';
 import { initialProfile } from './data/initialData';
-import { createTodo, deleteTodo, getProfile, getTodos, reorderTodos, updateProfile, updateTodo, updateTodosBulk } from './api';
+import {
+  createTodo,
+  deleteTodo,
+  getCurrentUser,
+  getProfile,
+  getTodos,
+  logoutUser,
+  reorderTodos,
+  updateProfile,
+  updateTodo,
+  updateTodosBulk,
+} from './api';
 import confetti from 'canvas-confetti';
 
 const STORAGE_KEY_THEME = 'taskflow_theme_local_v1';
@@ -17,6 +29,8 @@ const STORAGE_KEY_THEME = 'taskflow_theme_local_v1';
 export default function App() {
   const [theme, setTheme] = useState(() => localStorage.getItem(STORAGE_KEY_THEME) || 'dark');
   const [profile, setProfile] = useState(initialProfile);
+  const [currentUser, setCurrentUser] = useState(null);
+  const [isAuthOpen, setIsAuthOpen] = useState(false);
   const [todos, setTodos] = useState([]);
   const [visibleTodos, setVisibleTodos] = useState([]);
   const [selectedIds, setSelectedIds] = useState([]);
@@ -33,11 +47,14 @@ export default function App() {
     localStorage.setItem(STORAGE_KEY_THEME, theme);
   }, [theme]);
 
-  const getFilters = useCallback(() => ({
-    ...(statusFilter !== 'all' && statusFilter !== 'starred' ? { status: statusFilter } : {}),
-    ...(statusFilter === 'starred' ? { starred: true } : {}),
-    q: searchQuery,
-  }), [searchQuery, statusFilter]);
+  const getFilters = useCallback(
+    () => ({
+      ...(statusFilter !== 'all' && statusFilter !== 'starred' ? { status: statusFilter } : {}),
+      ...(statusFilter === 'starred' ? { starred: true } : {}),
+      q: searchQuery,
+    }),
+    [searchQuery, statusFilter],
+  );
 
   const loadTodos = useCallback(async () => {
     const [all, visible] = await Promise.all([getTodos(), getTodos(getFilters())]);
@@ -47,17 +64,40 @@ export default function App() {
 
   useEffect(() => {
     let active = true;
-    Promise.all([getTodos(), getProfile()])
-      .then(([savedTodos, savedProfile]) => {
+    (async () => {
+      try {
+        // Restore the refresh-cookie session before loading user-owned resources.
+        const authUser = await getCurrentUser();
+        const [savedTodos, savedProfile] = await Promise.all([getTodos(), getProfile()]);
         if (!active) return;
         setTodos(savedTodos);
         setVisibleTodos(savedTodos);
-        setProfile((current) => ({ ...current, name: savedProfile.displayName, username: savedProfile.username, email: savedProfile.email }));
+        if (authUser) {
+          setCurrentUser(authUser);
+          setProfile((current) => ({
+            ...current,
+            name: authUser.name || savedProfile.displayName,
+            username: authUser.email ? authUser.email.split('@')[0] : savedProfile.username,
+            email: authUser.email || savedProfile.email,
+          }));
+        } else {
+          setProfile((current) => ({
+            ...current,
+            name: savedProfile.displayName,
+            username: savedProfile.username,
+            email: savedProfile.email,
+          }));
+        }
         setApiError('');
-      })
-      .catch((error) => { if (active) setApiError(error.message || 'Could not connect to the API.'); })
-      .finally(() => { if (active) setLoading(false); });
-    return () => { active = false; };
+      } catch (error) {
+        if (active) setApiError(error.message || 'Could not connect to the API.');
+      } finally {
+        if (active) setLoading(false);
+      }
+    })();
+    return () => {
+      active = false;
+    };
   }, []);
 
   useEffect(() => {
@@ -73,7 +113,25 @@ export default function App() {
     setTimeout(() => setToasts((prev) => prev.filter((toast) => toast.id !== id)), 3200);
   }, []);
 
-  const toggleTheme = () => setTheme((current) => current === 'dark' ? 'light' : 'dark');
+  const toggleTheme = () => setTheme((current) => (current === 'dark' ? 'light' : 'dark'));
+
+  const handleAuthSuccess = (user) => {
+    setCurrentUser(user);
+    setProfile((current) => ({
+      ...current,
+      name: user.name || current.name,
+      email: user.email || current.email,
+      username: user.email ? user.email.split('@')[0] : current.username,
+    }));
+    loadTodos().catch(console.error);
+  };
+
+  const handleLogout = () => {
+    logoutUser();
+    setCurrentUser(null);
+    loadTodos().catch(console.error);
+    addToast('Signed out successfully', 'info');
+  };
 
   const handleSaveProfile = async (form) => {
     try {
@@ -133,15 +191,15 @@ export default function App() {
   };
 
   const handleToggleSelect = (id) => {
-    setSelectedIds((current) => current.includes(id) ? current.filter((itemId) => itemId !== id) : [...current, id]);
+    setSelectedIds((current) => (current.includes(id) ? current.filter((itemId) => itemId !== id) : [...current, id]));
   };
 
   const handleSelectAll = () => {
     const visibleIds = visibleTodos.map((todo) => todo.id);
     const allSelected = visibleIds.length > 0 && visibleIds.every((id) => selectedIds.includes(id));
-    setSelectedIds((current) => allSelected
-      ? current.filter((id) => !visibleIds.includes(id))
-      : [...new Set([...current, ...visibleIds])]);
+    setSelectedIds((current) =>
+      allSelected ? current.filter((id) => !visibleIds.includes(id)) : [...new Set([...current, ...visibleIds])],
+    );
   };
 
   const handleBulkStatusChange = async (status) => {
@@ -206,27 +264,50 @@ export default function App() {
     const inProgress = todos.filter((item) => item.status === 'in_progress').length;
     const done = todos.filter((item) => item.status === 'done').length;
     const starred = todos.filter((item) => item.starred).length;
-    return { total, todo, inProgress, done, starred, completionPct: total ? Math.round(done / total * 100) : 0 };
+    return { total, todo, inProgress, done, starred, completionPct: total ? Math.round((done / total) * 100) : 0 };
   }, [todos]);
 
-  const statusCounts = useMemo(() => ({
-    all: todos.length,
-    todo: todos.filter((item) => item.status === 'todo').length,
-    in_progress: todos.filter((item) => item.status === 'in_progress').length,
-    done: todos.filter((item) => item.status === 'done').length,
-    starred: todos.filter((item) => item.starred).length,
-  }), [todos]);
+  const statusCounts = useMemo(
+    () => ({
+      all: todos.length,
+      todo: todos.filter((item) => item.status === 'todo').length,
+      in_progress: todos.filter((item) => item.status === 'in_progress').length,
+      done: todos.filter((item) => item.status === 'done').length,
+      starred: todos.filter((item) => item.starred).length,
+    }),
+    [todos],
+  );
 
   return (
     <div className="app-layout">
       <Toast toasts={toasts} />
-      <Header profile={profile} onOpenProfile={() => setIsProfileOpen(true)} theme={theme} onToggleTheme={toggleTheme} />
+      <Header
+        profile={profile}
+        onOpenProfile={() => setIsProfileOpen(true)}
+        theme={theme}
+        onToggleTheme={toggleTheme}
+        currentUser={currentUser}
+        onOpenAuth={() => setIsAuthOpen(true)}
+        onLogout={handleLogout}
+      />
       <main className="main-content">
-        {apiError && <p role="alert" className="api-error">{apiError}</p>}
+        {apiError && (
+          <p role="alert" className="api-error">
+            {apiError}
+          </p>
+        )}
         <StatsDashboard stats={stats} />
         <AddTodoForm onAddTodo={handleAddTodo} />
-        <TodoFilters searchQuery={searchQuery} onSearchChange={setSearchQuery} statusFilter={statusFilter} onStatusFilterChange={setStatusFilter} statusCounts={statusCounts} />
-        {loading ? <p role="status">Loading to-dos…</p> : (
+        <TodoFilters
+          searchQuery={searchQuery}
+          onSearchChange={setSearchQuery}
+          statusFilter={statusFilter}
+          onStatusFilterChange={setStatusFilter}
+          statusCounts={statusCounts}
+        />
+        {loading ? (
+          <p role="status">Loading to-dos…</p>
+        ) : (
           <TodoList
             todos={visibleTodos}
             selectedIds={selectedIds}
@@ -247,8 +328,25 @@ export default function App() {
         onBulkDelete={handleBulkDelete}
         onClearSelection={() => setSelectedIds([])}
       />
-      <ProfileModal isOpen={isProfileOpen} onClose={() => setIsProfileOpen(false)} profile={profile} onSaveProfile={handleSaveProfile} stats={stats} />
-      <EditTodoModal isOpen={Boolean(editingTodo)} onClose={() => setEditingTodo(null)} todo={editingTodo} onSave={(todo) => handleUpdateTodo(todo.id, { title: todo.title, status: todo.status })} />
+      <ProfileModal
+        isOpen={isProfileOpen}
+        onClose={() => setIsProfileOpen(false)}
+        profile={profile}
+        onSaveProfile={handleSaveProfile}
+        stats={stats}
+      />
+      <AuthModal
+        isOpen={isAuthOpen}
+        onClose={() => setIsAuthOpen(false)}
+        onAuthSuccess={handleAuthSuccess}
+        onShowToast={addToast}
+      />
+      <EditTodoModal
+        isOpen={Boolean(editingTodo)}
+        onClose={() => setEditingTodo(null)}
+        todo={editingTodo}
+        onSave={(todo) => handleUpdateTodo(todo.id, { title: todo.title, status: todo.status })}
+      />
     </div>
   );
 }

@@ -10,6 +10,7 @@ import {
   HttpStatus,
   ParseIntPipe,
   Query,
+  UseGuards,
 } from '@nestjs/common';
 import { TodosService } from './todos.service.js';
 import { CreateTodoDto } from './dto/create-todo.dto.js';
@@ -17,19 +18,31 @@ import { UpdateTodoDto } from './dto/update-todo.dto.js';
 import { TodoQueryDto } from './dto/todo-query.dto.js';
 import { BulkTodoDto } from './dto/bulk-todo.dto.js';
 import { TodoOrderDto } from './dto/todo-order.dto.js';
+import { OptionalAuthGuard } from '../auth/auth.guard.js';
+import type { AuthUserPayload } from '../auth/auth.guard.js';
+import { CurrentUser } from '../auth/current-user.decorator.js';
+import { Public } from '../auth/auth.guard.js';
 
 @Controller('todos')
+@Public()
+@UseGuards(OptionalAuthGuard)
 export class TodosController {
   constructor(private readonly todosService: TodosService) {}
 
   @Post()
-  create(@Body() createTodoDto: CreateTodoDto) {
-    return this.todosService.create(createTodoDto);
+  create(
+    @Body() createTodoDto: CreateTodoDto,
+    @CurrentUser() user?: AuthUserPayload,
+  ) {
+    return this.todosService.create(createTodoDto, user?.id);
   }
 
   @Get()
-  findAll(@Query() query: TodoQueryDto) {
-    return this.todosService.findAll(query);
+  findAll(
+    @Query() query: TodoQueryDto,
+    @CurrentUser() user?: AuthUserPayload,
+  ) {
+    return this.todosService.findAll(query, user?.id);
   }
 
   @Get(':id')
