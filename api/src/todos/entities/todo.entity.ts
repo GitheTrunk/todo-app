@@ -1,4 +1,5 @@
-import { Column, Entity, PrimaryGeneratedColumn } from 'typeorm';
+import { Column, Entity, ManyToOne, PrimaryGeneratedColumn } from 'typeorm';
+import { User } from '../../users/entities/user.entity.js';
 
 export enum TodoStatus {
   TODO = 'TODO',
@@ -22,4 +23,8 @@ export class Todo {
 
   @Column({ type: 'integer', default: 0 })
   position: number;
+
+  @ManyToOne(() => User, (user) => user.todos, { onDelete: 'CASCADE', nullable: true })
+  user?: User;
 }
+
